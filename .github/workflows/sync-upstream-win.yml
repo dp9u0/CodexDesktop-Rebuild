@@ -1,0 +1,123 @@
+name: Sync Upstream & Build Windows
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Build Windows even when upstream is unchanged"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-win
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+  UPSTREAM_REPOSITORY: "Haleclipse/CodexDesktop-Rebuild"
+  UPSTREAM_BRANCH: "master"
+
+jobs:
+  sync:
+    name: Sync from upstream
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.sync.outputs.should_build }}
+      checkout_ref: ${{ steps.sync.outputs.checkout_ref }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+      synced: ${{ steps.sync.outputs.synced }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync upstream
+        id: sync
+        shell: bash
+        env:
+          FORCE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_build }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          upstream_sha="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "${upstream_sha}" HEAD; then
+            echo "Upstream is already included."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            if [ "${FORCE_BUILD}" = "true" ]; then
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
+          synced_sha="$(git rev-parse HEAD)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          echo "synced=true" >> "$GITHUB_OUTPUT"
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${synced_sha}" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows artifact
+    needs: sync
+    if: needs.sync.outputs.should_build == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout synced fork
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.checkout_ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install 7-Zip
+        run: choco install 7zip -y
+
+      - name: Add 7zz alias
+        shell: powershell
+        run: |
+          Copy-Item "C:\Program Files\7-Zip\7z.exe" "C:\Program Files\7-Zip\7zz.exe" -Force
+          echo "C:\Program Files\7-Zip" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Sync Codex app upstream package
+        run: node scripts/sync-upstream.js --force --skip-mac
+
+      - name: Apply Windows patches
+        run: node scripts/patch-all.js win
+
+      - name: Build Windows x64
+        run: npm run build:win-x64
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Codex-Windows-x64-${{ needs.sync.outputs.upstream_sha }}
+          path: out/*.zip
+          if-no-files-found: error
