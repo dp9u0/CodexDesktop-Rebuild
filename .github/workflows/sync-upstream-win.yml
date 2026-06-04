@@ -1,6 +1,13 @@
 name: Sync Upstream & Build Windows
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/sync-upstream-win.yml"
+      - "scripts/codex-update.ps1"
+      - "scripts/codex-launcher.cmd"
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -47,7 +54,7 @@ jobs:
         id: sync
         shell: bash
         env:
-          FORCE_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_build }}
+          FORCE_BUILD: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_build) }}
         run: |
           set -euo pipefail
 
