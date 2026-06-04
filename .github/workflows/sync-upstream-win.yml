@@ -151,7 +151,7 @@ jobs:
             generatedAt = (Get-Date).ToUniversalTime().ToString("o")
           }
 
-          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path "latest.json" -Encoding UTF8
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path "latest.json" -Encoding ASCII
           "$sha256  $($zip.Name)" | Set-Content -Path "sha256.txt" -Encoding ASCII
 
           "version=$version" >> $env:GITHUB_OUTPUT

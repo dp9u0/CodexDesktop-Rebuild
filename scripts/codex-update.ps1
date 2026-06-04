@@ -46,7 +46,19 @@ function Read-CurrentVersion {
 function Get-LatestManifest {
   $manifestUrl = "https://github.com/$Repository/releases/latest/download/latest.json"
   Write-Step "checking $manifestUrl"
-  return Invoke-RestMethod -Uri $manifestUrl -Headers $Headers
+  $client = New-Object System.Net.WebClient
+  foreach ($key in $Headers.Keys) {
+    $client.Headers.Add($key, $Headers[$key])
+  }
+
+  try {
+    $bytes = $client.DownloadData($manifestUrl)
+  } finally {
+    $client.Dispose()
+  }
+
+  $text = [System.Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)
+  return $text | ConvertFrom-Json
 }
 
 function Expand-Zip {
@@ -144,13 +156,56 @@ function Remove-EmptyDirectories {
     }
 }
 
+function Remove-DirectoryBestEffort {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  try {
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+    return
+  } catch {
+    Write-Step "standard cleanup failed; retrying with robocopy mirror"
+  }
+
+  $emptyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-empty-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path $emptyDir | Out-Null
+  try {
+    & robocopy.exe $emptyDir $Path /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+  } finally {
+    Remove-Item -LiteralPath $emptyDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Update-AppFiles {
   param(
     [Parameter(Mandatory = $true)][string]$NewAppDir,
     [Parameter(Mandatory = $true)][string]$BackupDir
   )
 
+  $robocopy = Get-Command robocopy.exe -ErrorAction SilentlyContinue
+  if (-not $robocopy) {
+    throw "robocopy.exe was not found"
+  }
+
   New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+
+  & $robocopy.Source $NewAppDir $AppDir /MIR /FFT /R:2 /W:2 /MT:8 /NP
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ge 8) {
+    throw "robocopy failed with exit code $exitCode"
+  }
+
+  return [ordered]@{
+    changed = "robocopy"
+    unchanged = ""
+    removed = ""
+    robocopyExitCode = $exitCode
+  }
+
   New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 
   $newFiles = @(Get-ChildItem -LiteralPath $NewAppDir -File -Recurse -Force)
@@ -326,7 +381,7 @@ try {
 } finally {
   if (-not $KeepTemp -and $tempRoot -and (Test-Path -LiteralPath $tempRoot)) {
     Write-Step "cleaning temporary files"
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    Remove-DirectoryBestEffort -Path $tempRoot
   } elseif ($KeepTemp -and $tempRoot) {
     Write-Step "temporary files kept at $tempRoot"
   }
