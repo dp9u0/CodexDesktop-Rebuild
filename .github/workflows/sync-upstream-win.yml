@@ -6,6 +6,9 @@ on:
       - master
     paths:
       - ".github/workflows/sync-upstream-win.yml"
+      - "scripts/patch-*.js"
+      - "scripts/build-from-upstream.js"
+      - "scripts/sync-upstream.js"
       - "scripts/codex-update.ps1"
       - "scripts/codex-launcher.cmd"
   schedule:
