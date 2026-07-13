@@ -15,10 +15,15 @@ const PATCHES = [
   "patch-i18n.js",
   "patch-copyright.js",
   "patch-devtools.js",
+  "patch-dialog-width.js",
+  "patch-center-width.js",
+  "patch-bold-color.js",
+  "patch-prose-alignment.js",
   "patch-fast-mode.js",
   "patch-plugin-auth.js",
   "patch-updater.js",
   "patch-archive-delete.js",
+  "patch-gpu.js",
 ];
 
 function main() {
